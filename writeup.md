@@ -155,7 +155,7 @@ Messages that contain object centroids, the groups they belong, the name, the pl
 ### Challenges
 
 #### Perception Challenge
-The same process did not apply very well to the challenge.world.
+The same process did not apply very well to the `challenge.world`.
 
 After some tweaking, including not doing passthrough filter, filtering more planes, the results were still not good.
 
