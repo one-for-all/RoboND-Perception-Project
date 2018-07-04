@@ -18,6 +18,7 @@ from sensor_stick.pcl_helper import *
 import rospy
 import tf
 from geometry_msgs.msg import Pose
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
 from std_msgs.msg import Int32
 from std_msgs.msg import String
@@ -52,6 +53,45 @@ def send_to_yaml(yaml_filename, dict_list):
         yaml.dump(data_dict, outfile, default_flow_style=False)
 
 
+def filter_noise(pcl_data, mean_k=50, std_dev_mul_thresh=1.0):
+    # Statistical Outlier Removal
+    noise_filter = pcl_data.make_statistical_outlier_filter()
+    noise_filter.set_mean_k(mean_k)
+    noise_filter.set_std_dev_mul_thresh(std_dev_mul_thresh)
+    cloud_filtered = noise_filter.filter()
+    return cloud_filtered
+
+
+def filter_passthrough(pcl_data, filter_axis, amin, amax):
+    # PassThrough Filter
+    passthrough_filter = pcl_data.make_passthrough_filter()
+    passthrough_filter.set_filter_field_name(filter_axis)
+    passthrough_filter.set_filter_limits(amin, amax)
+    cloud_filtered = passthrough_filter.filter()
+    return cloud_filtered
+
+
+def voxel_grid_downsample(pcl_data, leaf_size):
+    # Voxel Grid Downsample
+    vox = pcl_data.make_voxel_grid_filter()
+    vox.set_leaf_size(leaf_size, leaf_size, leaf_size)
+    return vox.filter()
+
+
+def ransac_plane(pcl_data, max_distance):
+    # RANSAC (Random Sample Consensus)
+    seg = pcl_data.make_segmenter()
+    seg.set_model_type(pcl.SACMODEL_PLANE)
+    seg.set_method_type(pcl.SAC_RANSAC)
+    seg.set_distance_threshold(max_distance)
+    inliers, coefficients = seg.segment()
+
+    # extract inliers and outliers
+    inlier_cloud = pcl_data.extract(inliers, negative=False)
+    outlier_cloud = pcl_data.extract(inliers, negative=True)
+    return inlier_cloud, outlier_cloud
+
+
 # Callback function for your Point Cloud Subscriber
 def pcl_callback(pcl_msg):
 
@@ -60,77 +100,46 @@ def pcl_callback(pcl_msg):
     pcl_data = ros_to_pcl(pcl_msg)
 
     # TODO: Statistical Outlier Filtering
-    noise_filter = pcl_data.make_statistical_outlier_filter()
-    noise_filter.set_mean_k(50)
-    x = 1.0
-    noise_filter.set_std_dev_mul_thresh(x)
-    cloud_filtered = noise_filter.filter()
+    cloud_filtered = filter_noise(pcl_data)
     pcl_noise_filtered_pub.publish(pcl_to_ros(cloud_filtered))
 
     # TODO: Voxel Grid Downsampling
-    vox = cloud_filtered.make_voxel_grid_filter()
-    LEAF_SIZE = 0.01
-    vox.set_leaf_size(LEAF_SIZE, LEAF_SIZE, LEAF_SIZE)
-    cloud_filtered = vox.filter()
+    cloud_filtered = voxel_grid_downsample(cloud_filtered, leaf_size=0.01)
     pcl_downsampled_pub.publish(pcl_to_ros(cloud_filtered))
 
     # TODO: PassThrough Filter
-    USE_PASSTHROUGH = False
+    USE_PASSTHROUGH = True
     if USE_PASSTHROUGH:
         # about z-axis
-        passthrough = cloud_filtered.make_passthrough_filter()
-        filter_axis = 'z'
-        passthrough.set_filter_field_name(filter_axis)
-        axis_min = 0.6
-        axis_max = 1.1
-        passthrough.set_filter_limits(axis_min, axis_max)
-        cloud_filtered = passthrough.filter()
-        passthrough = cloud_filtered.make_passthrough_filter()
+        cloud_filtered = filter_passthrough(cloud_filtered, 'z', 0.6, 1.1)
         # about y-axis
-        filter_axis = 'y'
-        passthrough.set_filter_field_name(filter_axis)
-        axis_min = -0.42
-        axis_max = 0.42
-        passthrough.set_filter_limits(axis_min, axis_max)
-        cloud_filtered = passthrough.filter()
+        cloud_filtered = filter_passthrough(cloud_filtered, 'y', -0.42, 0.42)
         pcl_passthrough_filtered_pub.publish(pcl_to_ros(cloud_filtered))
 
     # TODO: RANSAC Plane Segmentation
-    seg = cloud_filtered.make_segmenter()
-    seg.set_model_type(pcl.SACMODEL_PLANE)
-    seg.set_method_type(pcl.SAC_RANSAC)
-    max_distance = 0.02
-    seg.set_distance_threshold(max_distance)
-    inliers, coefficients = seg.segment()
-
     # TODO: Extract inliers and outliers
-    cloud_table = cloud_filtered.extract(inliers, negative=False)
+    cloud_table, cloud_objects = ransac_plane(cloud_filtered, max_distance=0.02)
     pcl_table_pub.publish(pcl_to_ros(cloud_table))
-    cloud_objects = cloud_filtered.extract(inliers, negative=True)
     pcl_objects_pub.publish(pcl_to_ros(cloud_objects))
 
     # Filter more planes
-    for i in range(2):
-        seg = cloud_objects.make_segmenter()
-        seg.set_model_type(pcl.SACMODEL_PLANE)
-        seg.set_method_type(pcl.SAC_RANSAC)
-        max_distance = 0.02
-        seg.set_distance_threshold(max_distance)
-        inliers, coefficients = seg.segment()
-        print("inliers: {}".format(len(inliers)))
-        if len(inliers) < 500:
-            break
-        else:
-            cloud_objects = cloud_objects.extract(inliers, negative=True)
+    # for i in range(2):
+    #     seg = cloud_objects.make_segmenter()
+    #     seg.set_model_type(pcl.SACMODEL_PLANE)
+    #     seg.set_method_type(pcl.SAC_RANSAC)
+    #     max_distance = 0.02
+    #     seg.set_distance_threshold(max_distance)
+    #     inliers, coefficients = seg.segment()
+    #     print("inliers: {}".format(len(inliers)))
+    #     if len(inliers) < 500:
+    #         break
+    #     else:
+    #         cloud_objects = cloud_objects.extract(inliers, negative=True)
 
     pcl_objects_2_pub.publish(pcl_to_ros(cloud_objects))
 
     # TODO: Statistical Outlier Filtering again after getting objects
-    noise_filter = cloud_objects.make_statistical_outlier_filter()
-    noise_filter.set_mean_k(20)
-    x = 0.9
-    noise_filter.set_std_dev_mul_thresh(x)
-    cloud_objects = noise_filter.filter()
+    cloud_objects = filter_noise(cloud_objects, 20, 0.9)
     pcl_noise_filtered_objects_pub.publish(pcl_to_ros(cloud_objects))
 
     # TODO: Euclidean Clustering
@@ -197,24 +206,39 @@ def pcl_callback(pcl_msg):
 
     rospy.loginfo('Detected {} objects: {}'.format(len(detected_objects_labels), detected_objects_labels))
 
+
+    # Assembles points that make up obstacles
+    obstacles_table = filter_noise(pcl_data)
+    obstacles_table = voxel_grid_downsample(obstacles_table, leaf_size=0.01)
+    obstacles_table = filter_passthrough(obstacles_table, 'z', 0.1, 5)
+    obstacles_table, _ = ransac_plane(obstacles_table, max_distance=0.02)
+
+    # Assemble table and objects together (tried, but prevented the robot from reaching to objects)
+    # obstacles = pcl.PointCloud_PointXYZRGB()
+    # obstacles_table_array = obstacles_table.to_array()
+    # objects_cloud_array = cloud_objects.to_array()
+    # obstacles.from_array(np.concatenate((obstacles_table_array, objects_cloud_array), axis=0))
+    obstacles_pub.publish(pcl_to_ros(obstacles_table))
+
     # Publish the list of detected objects
-    # detected_objects_pub.publish(detected_objects_list)
+    detected_objects_pub.publish(detected_objects_list)
 
     # Suggested location for where to invoke your pr2_mover() function within pcl_callback()
     # Could add some logic to determine whether or not your object detections are robust
     # before calling pr2_mover()
-    # try:
-    #     pr2_mover(detected_objects_list)
-    # except rospy.ROSInterruptException:
-    #     pass
+    global pick_and_place_prepared
+    print('prepared: {}'.format(pick_and_place_prepared))
+    if pick_and_place_prepared:
+        try:
+            pr2_mover(detected_objects_list)
+        except rospy.ROSInterruptException:
+            pass
 
 
 # function to load parameters and request PickPlace service
 def pr2_mover(detected_objects_list):
 
     # TODO: Initialize variables
-    labels = []
-    centroids = []
     yaml_detected_objects_list = []
 
     # Initialize message variables
@@ -277,16 +301,22 @@ def pr2_mover(detected_objects_list):
                 # Wait for 'pick_place_routine' service to come up
                 rospy.wait_for_service('pick_place_routine')
 
-                # try:
-                #     pick_place_routine = rospy.ServiceProxy('pick_place_routine', PickPlace)
-                #
-                #     # TODO: Insert your message variables to be sent as a service request
-                #     resp = pick_place_routine(test_scene_num, object_name, which_arm, pick_pose, place_pose)
-                #
-                #     print ("Response: ", resp.success)
-                #
-                # except rospy.ServiceException, e:
-                #     print "Service call failed: %s"%e
+                try:
+                    pick_place_routine = rospy.ServiceProxy('pick_place_routine', PickPlace)
+
+                    # TODO: Insert your message variables to be sent as a service request
+                    # deduct 0.2 from target place_pose to ensure the object dropped in the box
+                    # place_pose.position.x -= 0.2
+                    # add noise to place_pose to prevent objects from stacking up and falling out of box
+                    place_pose.position.x += np.random.normal(scale=0.05)
+                    place_pose.position.y += np.random.normal(scale=0.05)
+                    place_pose.position.z += np.random.normal(scale=0.05)
+                    resp = pick_place_routine(test_scene_num, object_name, which_arm, pick_pose, place_pose)
+
+                    print ("Response: ", resp.success)
+
+                except rospy.ServiceException, e:
+                    print "Service call failed: %s"%e
 
                 break
 
@@ -294,13 +324,41 @@ def pr2_mover(detected_objects_list):
     send_to_yaml('output_{}.yaml'.format(test_scene_num.data), yaml_detected_objects_list)
 
 
+# Global state variables for turning robots and preparing for pick and place
+current_state = 0
+pick_and_place_prepared = False
+
+
+def joint_state_callback(joint_state_msg):
+    #####
+    # Callback function for joint state
+    # Turn different angles and change to corresponding states
+    #####
+    global current_state
+    global pick_and_place_prepared
+    world_joint = joint_state_msg.position[-1]
+    tolerance = 0.001
+    first_angle = math.pi/2
+    second_angle = -math.pi/2
+    if current_state == 0:
+        world_joint_pub.publish(first_angle)
+    elif current_state == 1:
+        world_joint_pub.publish(second_angle)
+    elif current_state == 2:
+        world_joint_pub.publish(0)
+
+    if current_state == 0 and abs(world_joint-first_angle) < tolerance:
+        current_state = 1
+    elif current_state == 1 and abs(world_joint-second_angle) < tolerance:
+        current_state = 2
+    elif current_state == 2 and abs(world_joint-0) < tolerance:
+        pick_and_place_prepared = True
+
+
 if __name__ == '__main__':
 
     # TODO: ROS node initialization
     rospy.init_node('clustering', anonymous=True)
-
-    # TODO: Create Subscribers
-    pcl_sub = rospy.Subscriber("/pr2/world/points", pc2.PointCloud2, pcl_callback, queue_size=1)
 
     # TODO: Create Publishers
     pcl_noise_filtered_pub = rospy.Publisher("/pcl_noise_filtered", PointCloud2, queue_size=1)
@@ -316,7 +374,12 @@ if __name__ == '__main__':
 
     # Motion Control publishers
     world_joint_pub = rospy.Publisher("/pr2/world_joint_controller/command", Float64, queue_size=1)
-    obstacles_pub = rospy.Publisher("/pr2/3D_map/points", PointCloud2, queue_size=1)
+    obstacles_pub = rospy.Publisher("/pr2/3d_map/points", PointCloud2, queue_size=1)
+
+    # TODO: Create Subscribers
+    pcl_sub = rospy.Subscriber("/pr2/world/points", pc2.PointCloud2, pcl_callback, queue_size=1)
+    # Motion Control subscribers
+    joint_states_sub = rospy.Subscriber("joint_states", JointState, joint_state_callback, queue_size=1)
 
     # TODO: Load Model From disk
     model = pickle.load(open('model.sav', 'rb'))
@@ -328,10 +391,10 @@ if __name__ == '__main__':
     # Initialize color_list
     get_color_list.color_list = []
 
-    rate = rospy.Rate(1)
+    # rate = rospy.Rate(1)
 
     # TODO: Spin while node is not shutdown
     while not rospy.is_shutdown():
-        # rospy.spin()
-        world_joint_pub.publish(math.pi/2)
-        rate.sleep()
+        rospy.spin()
+        # world_joint_pub.publish(math.pi/2)
+        # rate.sleep()

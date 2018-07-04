@@ -154,6 +154,7 @@ Messages that contain object centroids, the groups they belong, the name, the pl
 
 ### Challenges
 
+#### Perception Challenge
 The same process did not apply very well to the challenge.world.
 
 After some tweaking, including not doing passthrough filter, filtering more planes, the results were still not good.
@@ -162,3 +163,25 @@ The clusters look fairly cluttered:
 
 ![challenge scene recognition]
 
+#### Motion Challenge
+
+To build up a collision map, the robot was first instructed to turn left and right in order to see around.    
+The point cloud that are used for collision map are the points that correspond to tables, but not objects.
+
+Once the robot is finished building a collision map, the info of recognized objects that appear in the pick list are sent to the pick and place routine for action.
+
+The execution of the entire process, however, is far from perfect.    
+An example execution can be found at [this youtube link](https://youtu.be/XXh-U9o-l1w).
+
+### Areas for improvements
+
+The two challenges indeed exposed many areas for improvement.
+
+1. The perception pipeline that worked for `test1.world`, `test2.world` and `test3.world`, was not generalized for all environments, as shown with `challenge.world`.    
+In particular, we were not able to separate all the tables, background objects consistently from target projects, which result in very cluttered clusters.
+
+2. The robot was not able to grasp the objects every time even if it had reached the correct pose.
+
+3. When constructing the collision map, we did not know how to remove points from collision map to inform the robot of the new empty spaces.
+
+4. In general, the entire process felt a bit sluggish, as seen when perception updates took some time to show. The VM uses 8 cores and 14 GB RAM.
